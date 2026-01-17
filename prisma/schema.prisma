@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+  
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+
+enum ClientStatus {
+  ACTIVE    // Normal state: Can add logs
+  PAUSED    // Frozen: Cannot add logs, but Client can still view history
+  ARCHIVED  // Hidden/Closed: Work is done
+}
+
+
+model Client {
+  id          String   @id @default(uuid())
+
+  // --- SECURITY & ACCESS ---
+  // The "Password". This UUID allows full read/write access.
+  // Never expose this in public API responses.
+  adminToken  String   @unique @default(uuid())
+
+  // The "Public URL". This is used for the read-only client view.
+  // Example: retain.app/acme-corp
+  slug        String   @unique
+
+  // --- RETAINER DATA ---
+  name        String
+  
+  // Using Decimal is critical for billing (prevents 0.1 + 0.2 = 0.30004 errors)
+  // Precision: 10 digits total, 2 decimal places (e.g. 99999999.99)
+  totalHours  Decimal  @default(0.00) @db.Decimal(10, 2)
+  
+  // Optional: A link to Stripe, PayPal, or an invoice for when they run out
+  refillLink  String?
+
+  status      ClientStatus @default(ACTIVE)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relation: One client has many work logs
+  logs        WorkLog[]
+}
+
+model WorkLog {
+  id          String   @id @default(uuid())
+
+  description String
+  
+  // The amount of time spent on this specific task
+  hours       Decimal  @db.Decimal(5, 2)
+  
+  // When the work was actually done (allows back-dating logs)
+  date        DateTime @default(now())
+
+  // Relation fields
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+}

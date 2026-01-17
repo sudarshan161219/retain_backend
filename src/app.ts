@@ -1,0 +1,109 @@
+import "reflect-metadata";
+import type { Application } from "express";
+import express from "express";
+import cors from "cors";
+import { createServer, Server } from "node:http";
+import { initSocket } from "./socket/index.js";
+import helmet from "helmet";
+import * as dotenv from "dotenv";
+import rateLimit from "express-rate-limit";
+import { prisma } from "./utils/prismaClient.js";
+import { addRoutes } from "./config/routes.config.js";
+import { errorMiddleware } from "./middlewares/error.middleware.js";
+
+dotenv.config();
+
+export class App {
+  public app: Application;
+  public server: Server;
+  public port: number;
+  private prisma = prisma;
+
+  constructor() {
+    this.app = express();
+    this.server = createServer(this.app);
+    this.port = Number(process.env.PORT) || 8080;
+
+    this.app.set("trust proxy", 1);
+
+    this.initializeMiddlewares();
+    this.initializeRateLimiter();
+    this.initializeRoutes();
+    this.initializeErrorHandling();
+  }
+
+  private initializeMiddlewares() {
+    this.app.use(
+      helmet({
+        contentSecurityPolicy: {
+          directives: {
+            ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+            "connect-src": [
+              "'self'",
+              process.env.FRONTEND_URL || "http://localhost:5173",
+            ],
+          },
+        },
+      })
+    );
+    this.app.use(express.json());
+
+    this.app.use(
+      cors({
+        origin:
+          process.env.NODE_ENV === "production"
+            ? process.env.FRONTEND_URL
+            : ["http://localhost:5173"],
+        credentials: true,
+      })
+    );
+  }
+
+  private initializeRateLimiter() {
+    this.app.use(
+      rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 300,
+      })
+    );
+
+    this.app.use(
+      "/api/projects/view",
+      rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 30,
+      })
+    );
+  }
+
+  private initializeRoutes() {
+    addRoutes(this.app);
+  }
+
+  private initializeErrorHandling() {
+    this.app.use(errorMiddleware);
+  }
+
+  public async start() {
+    if (!process.env.DATABASE_URL) {
+      console.error("❌ DATABASE_URL missing");
+      process.exit(1);
+    }
+
+    await this.prisma.$connect();
+
+    // 🔌 Initialize Socket.IO BEFORE listen
+    initSocket(this.server);
+
+    this.server.listen(this.port, () => {
+      console.log(`🚀 Server running on port ${this.port}`);
+    });
+
+    process.on("SIGTERM", async () => {
+      await this.prisma.$disconnect();
+      process.exit(0);
+    });
+  }
+}
+
+new App().start();
