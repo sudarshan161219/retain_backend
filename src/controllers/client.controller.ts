@@ -11,7 +11,7 @@ import { ClientStatus } from "@prisma/client";
 export class ClientController {
   constructor(
     @inject(TYPES.ClientService)
-    private clientService: ClientService
+    private clientService: ClientService,
   ) {}
 
   /**
@@ -40,7 +40,7 @@ export class ClientController {
       const client = await this.clientService.createClient(
         name,
         Number(totalHours),
-        refillLink
+        refillLink,
       );
 
       // CRITICAL: This is the ONLY time the adminToken is sent in the body
@@ -144,7 +144,7 @@ export class ClientController {
         token,
         description,
         Number(hours),
-        date ? new Date(date) : new Date()
+        date ? new Date(date) : new Date(),
       );
 
       // 4. Real-time Update
@@ -273,7 +273,7 @@ export class ClientController {
 
       const updatedClient = await this.clientService.updateStatus(
         token,
-        status
+        status,
       );
 
       // Notify users (e.g. show "Paused" badge)
@@ -314,7 +314,7 @@ export class ClientController {
         const io = getIO();
         if (deletedClient.slug) {
           console.log(
-            `🗑️ Emitting deletion event to room: ${deletedClient.slug}`
+            `🗑️ Emitting deletion event to room: ${deletedClient.slug}`,
           );
 
           io.to(deletedClient.slug).emit("retainer-update", {
@@ -334,6 +334,37 @@ export class ClientController {
       });
     } catch (error) {
       next(error);
+    }
+  }
+
+  async exportClientLogs(req: Request, res: Response, next: NextFunction) {
+    try {
+      const authHeader = req.headers.authorization;
+
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        throw new AppError({
+          message: "Unauthorized: Missing Admin Token",
+          statusCode: 401,
+        });
+      }
+
+      const token = authHeader.split(" ")[1];
+
+      const { workbook, fileName } =
+        await this.clientService.generateExcelReport(token);
+
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      );
+      res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
+
+      // Stream directly to response
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error(error);
+      res.status(404).json({ message: "Could not generate report" });
     }
   }
 }

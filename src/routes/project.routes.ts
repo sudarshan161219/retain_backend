@@ -22,7 +22,7 @@ export class ClientRouter {
 
   constructor(
     @inject(TYPES.ClientController)
-    private clientController: ClientController
+    private clientController: ClientController,
   ) {
     this.router = Router();
     this.initializeRoutes();
@@ -61,7 +61,7 @@ export class ClientRouter {
       ],
       this.validate,
       (req: Request, res: Response, next: NextFunction) =>
-        this.clientController.create(req, res, next)
+        this.clientController.create(req, res, next),
     );
 
     /**
@@ -80,7 +80,7 @@ export class ClientRouter {
       ],
       this.validate,
       (req: Request, res: Response, next: NextFunction) =>
-        this.clientController.getAdminOne(req, res, next)
+        this.clientController.getAdminOne(req, res, next),
     );
 
     /**
@@ -94,12 +94,12 @@ export class ClientRouter {
         body("status")
           .isIn(Object.values(ClientStatus))
           .withMessage(
-            `Status must be one of: ${Object.values(ClientStatus).join(", ")}`
+            `Status must be one of: ${Object.values(ClientStatus).join(", ")}`,
           ),
       ],
       this.validate,
       (req: Request, res: Response, next: NextFunction) =>
-        this.clientController.updateStatus(req, res, next)
+        this.clientController.updateStatus(req, res, next),
     );
 
     this.router.patch(
@@ -122,7 +122,7 @@ export class ClientRouter {
           .optional({ nullable: true, checkFalsy: true })
           .isURL()
           .withMessage(
-            "Refill link must be a valid URL (e.g. https://stripe.com/...)"
+            "Refill link must be a valid URL (e.g. https://stripe.com/...)",
           ),
 
         body("totalHours")
@@ -133,7 +133,7 @@ export class ClientRouter {
       ],
       this.validate,
       (req: Request, res: Response, next: NextFunction) =>
-        this.clientController.updateDetails(req, res, next)
+        this.clientController.updateDetails(req, res, next),
     );
 
     /**
@@ -147,7 +147,7 @@ export class ClientRouter {
       [param("slug").trim().notEmpty().withMessage("Slug is required")],
       this.validate,
       (req: Request, res: Response, next: NextFunction) =>
-        this.clientController.getPublicOne(req, res, next)
+        this.clientController.getPublicOne(req, res, next),
     );
 
     // ==========================================
@@ -173,7 +173,7 @@ export class ClientRouter {
       ],
       this.validate,
       (req: Request, res: Response, next: NextFunction) =>
-        this.clientController.addLog(req, res, next)
+        this.clientController.addLog(req, res, next),
     );
 
     /**
@@ -188,7 +188,7 @@ export class ClientRouter {
       ],
       this.validate,
       (req: Request, res: Response, next: NextFunction) =>
-        this.clientController.deleteLog(req, res, next)
+        this.clientController.deleteLog(req, res, next),
     );
 
     this.router.delete(
@@ -196,7 +196,16 @@ export class ClientRouter {
       [header("authorization").exists().withMessage("Admin token is required")],
       this.validate,
       (req: Request, res: Response, next: NextFunction) =>
-        this.clientController.deleteClient(req, res, next)
+        this.clientController.deleteClient(req, res, next),
+    );
+
+    /// export route
+    this.router.get(
+      "/export",
+      [header("authorization").exists().withMessage("Admin token is required")],
+      this.validate,
+      (req: Request, res: Response, next: NextFunction) =>
+        this.clientController.exportClientLogs(req, res, next),
     );
   }
 }

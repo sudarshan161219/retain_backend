@@ -3,6 +3,7 @@ import { prisma } from "../utils/prismaClient.js";
 import { AppError } from "../errors/AppError.js";
 import { StatusCodes } from "http-status-codes";
 import { ClientStatus } from "@prisma/client";
+import ExcelJS from "exceljs";
 import slugify from "slugify";
 import { nanoid } from "nanoid";
 
@@ -108,7 +109,7 @@ export class ClientService {
     adminToken: string,
     description: string,
     hours: number,
-    date: Date
+    date: Date,
   ) {
     // 1. Verify Ownership & Check Status
     const client = await prisma.client.findUnique({
@@ -180,7 +181,7 @@ export class ClientService {
 
   async updateDetails(
     token: string,
-    data: { name?: string; refillLink?: string; totalHours?: number }
+    data: { name?: string; refillLink?: string; totalHours?: number },
   ) {
     // 1. Validate Token
     const client = await prisma.client.findUnique({
@@ -197,7 +198,7 @@ export class ClientService {
         // Allow setting to null explicitly if passed
         ...(data.refillLink !== undefined && { refillLink: data.refillLink }),
 
-        ...(data.totalHours && { totalHours: data.totalHours }),
+        ...(data.totalHours && { totalHours: { increment: data.totalHours } }),
       },
     });
   }
@@ -230,5 +231,74 @@ export class ClientService {
     return await prisma.client.delete({
       where: { id: client.id },
     });
+  }
+
+  async generateExcelReport(token: string) {
+    const client = await prisma.client.findUnique({
+      where: { adminToken: token },
+      include: {
+        logs: {
+          orderBy: { date: "desc" },
+        },
+      },
+    });
+
+    if (!client) {
+      throw new AppError({
+        message: "Invalid admin token or project already deleted",
+        statusCode: 404,
+      });
+    }
+
+    // workbook and worksheet
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Work History");
+
+    // columns
+    worksheet.columns = [
+      { header: "Date", key: "date", width: 15 },
+      { header: "Description", key: "description", width: 40 },
+      { header: "Hours Used", key: "hours", width: 15 },
+    ];
+
+    // Header Row
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.alignment = { horizontal: "center" };
+
+    // Data Rows
+    client.logs.forEach((log) => {
+      worksheet.addRow({
+        // Format Date to YYYY-MM-DD (ExcelJS handles date objects well, but string is safer for formatting)
+        date: log.date.toISOString().split("T")[0],
+
+        description: log.description,
+
+        //Converting Prisma 'Decimal' to JavaScript 'Number'
+        hours: log.hours.toNumber(),
+      });
+    });
+
+    // Total Row
+    // Calculate total hours from logs
+    const totalLogged = client.logs.reduce(
+      (acc, log) => acc + log.hours.toNumber(),
+      0,
+    );
+
+    worksheet.addRow({}); // Empty row
+    const totalRow = worksheet.addRow({
+      description: "TOTAL LOGGED HOURS",
+      hours: totalLogged,
+    });
+    totalRow.font = { bold: true };
+
+    // Return the workbook and a clean filename
+    const safeName = client.name.replace(/[^a-z0-9]/gi, "_").toLowerCase();
+
+    return {
+      workbook,
+      fileName: `${safeName}_retainer_report.xlsx`,
+    };
   }
 }
