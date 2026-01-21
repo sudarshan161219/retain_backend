@@ -47,9 +47,14 @@ model Client {
   logs        WorkLog[]
 }
 
+
+enum LogType {
+  WORK
+  REFILL
+}
+
 model WorkLog {
   id          String   @id @default(uuid())
-
   description String
   
   // The amount of time spent on this specific task
@@ -58,9 +63,13 @@ model WorkLog {
   // When the work was actually done (allows back-dating logs)
   date        DateTime @default(now())
 
+// 2. Add the type field (Default to WORK so existing logs don't break)
+  type        LogType  @default(WORK)
+
   // Relation fields
   clientId    String
   client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

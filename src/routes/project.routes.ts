@@ -136,6 +136,12 @@ export class ClientRouter {
         this.clientController.updateDetails(req, res, next),
     );
 
+    this.router.post(
+      "/clients/refill",
+      (req: Request, res: Response, next: NextFunction) =>
+        this.clientController.addRefillLog(req, res, next),
+    );
+
     /**
      * 4. PUBLIC VIEW (Client Read-Only)
      * GET /api/clients/:slug

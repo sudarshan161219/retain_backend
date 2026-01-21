@@ -13,7 +13,32 @@ export class ClientController {
     @inject(TYPES.ClientService)
     private clientService: ClientService,
   ) {}
+  /**
+   * Helper: safely extracts Bearer token
+   */
+  private extractToken(req: Request): string {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      throw new AppError({
+        message: "Unauthorized: Missing Admin Token",
+        statusCode: 401,
+      });
+    }
+    return authHeader.split(" ")[1];
+  }
+  /**
+   * Helper: handles socket emission without crashing the request
+   */
+  private emitUpdate(slug: string | undefined, type: string, payload: any) {
+    if (!slug) return;
+    try {
+      const io = getIO();
 
+      io.to(slug).emit("retainer-update", { type, data: payload });
+    } catch (err) {
+      console.error(`⚠️ Socket emit failed for ${slug}:`, err);
+    }
+  }
   /**
    * CREATE RETAINER (Landing Page)
    * POST /api/clients
@@ -66,16 +91,7 @@ export class ClientController {
    */
   async getAdminOne(req: Request, res: Response, next: NextFunction) {
     try {
-      const authHeader = req.headers.authorization;
-
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        throw new AppError({
-          message: "Unauthorized: Missing Admin Token",
-          statusCode: 401,
-        });
-      }
-
-      const token = authHeader.split(" ")[1];
+      const token = this.extractToken(req);
 
       const adminView = await this.clientService.getClientByAdminToken(token);
 
@@ -123,12 +139,7 @@ export class ClientController {
    */
   async addLog(req: Request, res: Response, next: NextFunction) {
     try {
-      // 1. Auth Check
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        throw new AppError({ message: "Unauthorized", statusCode: 401 });
-      }
-      const token = authHeader.split(" ")[1];
+      const token = this.extractToken(req);
 
       // 2. Body Validation
       const { description, hours, date } = req.body;
@@ -148,22 +159,53 @@ export class ClientController {
       );
 
       // 4. Real-time Update
-      try {
-        const io = getIO();
-        // Emit to the SPECIFIC ROOM for this client (using the slug we got back)
-        if (newLog.client && newLog.client.slug) {
-          io.to(newLog.client.slug).emit("retainer-update", {
-            type: "ADD_LOG",
-            log: newLog,
-          });
-        }
-      } catch (err) {
-        console.error("⚠️ Socket emit failed:", err);
-      }
+      this.emitUpdate(newLog.client?.slug, "ADD_LOG", newLog);
 
       return res.status(StatusCodes.CREATED).json({
         message: "Log added",
         data: newLog,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async addRefillLog(req: Request, res: Response, next: NextFunction) {
+    try {
+      // 1. Extract Token
+      const token = this.extractToken(req);
+
+      // 2. Validate Body
+      const { hours, createLog } = req.body;
+
+      if (!hours || isNaN(Number(hours))) {
+        throw new AppError({
+          message: "Valid hours amount is required",
+          statusCode: StatusCodes.BAD_REQUEST,
+        });
+      }
+
+      // 3. Service Call (Returns updated client + optional log)
+      const { client, log } = await this.clientService.refillClient(
+        token,
+        Number(hours),
+        !!createLog, // Force boolean
+      );
+
+      // 4. Real-time Update
+      // We send both the new total and the log (if it exists)
+      this.emitUpdate(client.slug, "REFILL", {
+        totalHours: client.totalHours,
+        log: log,
+      });
+
+      // 5. Response
+      return res.status(StatusCodes.OK).json({
+        message: "Balance refilled successfully",
+        data: {
+          totalHours: client.totalHours,
+          log,
+        },
       });
     } catch (error) {
       next(error);
@@ -177,25 +219,13 @@ export class ClientController {
    */
   async deleteLog(req: Request, res: Response, next: NextFunction) {
     try {
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        throw new AppError({ message: "Unauthorized", statusCode: 401 });
-      }
-      const token = authHeader.split(" ")[1];
+      const token = this.extractToken(req);
       const { logId } = req.params;
 
       const result = await this.clientService.deleteWorkLog(token, logId);
 
-      // Notify client view to remove the log from the list
-      try {
-        const io = getIO();
-        io.to(result.clientSlug).emit("retainer-update", {
-          type: "DELETE_LOG",
-          logId: logId,
-        });
-      } catch (err) {
-        console.error("⚠️ Socket emit failed:", err);
-      }
+      //  Real-time Update
+      this.emitUpdate(result.clientSlug, "DELETE_LOG", logId);
 
       return res.status(StatusCodes.OK).json({ message: "Log deleted" });
     } catch (error) {
@@ -205,17 +235,9 @@ export class ClientController {
 
   async updateDetails(req: Request, res: Response, next: NextFunction) {
     try {
-      const authHeader = req.headers.authorization as string;
       const { name, refillLink, totalHours } = req.body;
 
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        throw new AppError({
-          message: "Unauthorized: Missing Admin Token",
-          statusCode: 401,
-        });
-      }
-
-      const token = authHeader.split(" ")[1];
+      const token = this.extractToken(req);
 
       const client = await this.clientService.updateDetails(token, {
         name,
@@ -223,23 +245,8 @@ export class ClientController {
         totalHours,
       });
 
-      try {
-        const io = getIO();
-        if (client.slug) {
-          io.to(client.slug).emit("retainer-update", {
-            type: "DETAILS_UPDATE",
-            client: {
-              name: client.name,
-              totalHours: client.totalHours,
-              refillLink: client.refillLink,
-            },
-          });
-        }
-      } catch (err) {
-        console.error("⚠️ Socket emit failed in controller:", err);
-        // We don't throw here because the DB update was successful,
-        // we just failed to notify the live view.
-      }
+      //  Real-time Update
+      this.emitUpdate(client.slug, "DETAILS_UPDATE", client);
 
       res.status(200).json({
         success: true,
@@ -258,11 +265,7 @@ export class ClientController {
    */
   async updateStatus(req: Request, res: Response, next: NextFunction) {
     try {
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        throw new AppError({ message: "Unauthorized", statusCode: 401 });
-      }
-      const token = authHeader.split(" ")[1];
+      const token = this.extractToken(req);
 
       const { status } = req.body;
 
@@ -276,16 +279,8 @@ export class ClientController {
         status,
       );
 
-      // Notify users (e.g. show "Paused" badge)
-      try {
-        const io = getIO();
-        io.to(updatedClient.slug).emit("retainer-update", {
-          type: "STATUS_UPDATE",
-          status: updatedClient.status,
-        });
-      } catch (err) {
-        console.error("⚠️ Socket emit failed:", err);
-      }
+      //  Real-time Update -- Notify users (e.g. show "Paused" badge)
+      this.emitUpdate(updatedClient.slug, "STATUS_UPDATE", { status });
 
       res.status(200).json({ data: updatedClient });
     } catch (error) {
@@ -304,29 +299,13 @@ export class ClientController {
         });
       }
 
-      const token = authHeader.split(" ")[1];
+      const token = this.extractToken(req);
 
       // 1. Delete from DB
       const deletedClient = await this.clientService.deleteClient(token);
 
       // 2. Emit "PROJECT_DELETED" Event
-      try {
-        const io = getIO();
-        if (deletedClient.slug) {
-          console.log(
-            `🗑️ Emitting deletion event to room: ${deletedClient.slug}`,
-          );
-
-          io.to(deletedClient.slug).emit("retainer-update", {
-            type: "PROJECT_DELETED",
-          });
-
-          // Optional: Forcefully disconnect users from this room after a delay
-          // io.in(deletedClient.slug).disconnectSockets();
-        }
-      } catch (err) {
-        console.error("⚠️ Socket emit failed during deletion:", err);
-      }
+      this.emitUpdate(deletedClient.slug, "PROJECT_DELETED", deletedClient);
 
       res.status(200).json({
         success: true,
@@ -339,16 +318,7 @@ export class ClientController {
 
   async exportClientLogs(req: Request, res: Response, next: NextFunction) {
     try {
-      const authHeader = req.headers.authorization;
-
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        throw new AppError({
-          message: "Unauthorized: Missing Admin Token",
-          statusCode: 401,
-        });
-      }
-
-      const token = authHeader.split(" ")[1];
+      const token = this.extractToken(req);
 
       const { workbook, fileName } =
         await this.clientService.generateExcelReport(token);

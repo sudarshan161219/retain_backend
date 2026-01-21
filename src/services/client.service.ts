@@ -79,6 +79,7 @@ export class ClientService {
             description: true,
             hours: true,
             date: true,
+            type: true,
           },
         },
       },
@@ -103,7 +104,6 @@ export class ClientService {
 
   /**
    * ADD WORK LOG
-   * Securely adds time to a client's history.
    */
   async addWorkLog(
     adminToken: string,
@@ -137,6 +137,7 @@ export class ClientService {
         hours, // Prisma will handle Decimal conversion
         date,
         clientId: client.id,
+        type: "WORK",
       },
       include: {
         client: true, // Return client info so Controller can emit to the correct 'slug' room
@@ -144,6 +145,53 @@ export class ClientService {
     });
 
     return newLog;
+  }
+
+  /**
+   * ADD REFILL LOG
+   */
+  async refillClient(adminToken: string, hours: number, createLog: boolean) {
+    // 1. Find Client
+    const client = await prisma.client.findUnique({
+      where: { adminToken },
+    });
+
+    if (!client) {
+      throw new AppError({
+        message: "Invalid Access Token",
+        statusCode: StatusCodes.UNAUTHORIZED,
+      });
+    }
+
+    // 2. Transaction: Update Budget + Create Log
+    const result = await prisma.$transaction(async (tx) => {
+      // Step A: Increase the Total Budget
+      const updatedClient = await tx.client.update({
+        where: { id: client.id },
+        data: {
+          totalHours: { increment: hours }, // Atomic increment
+        },
+      });
+
+      let newLog = null;
+
+      // Step B: Create a "Refill" Log (Optional)
+      if (createLog) {
+        newLog = await tx.workLog.create({
+          data: {
+            clientId: client.id,
+            description: `⚡ Refill: Added ${hours} hours`,
+            hours: hours,
+            type: "REFILL", // 👈 type refill
+            date: new Date(),
+          },
+        });
+      }
+
+      return { client: updatedClient, log: newLog };
+    });
+
+    return result;
   }
 
   /**
@@ -189,7 +237,7 @@ export class ClientService {
     });
     if (!client)
       throw new AppError({ message: "Invalid token", statusCode: 401 });
-
+    console.log("service", data.totalHours);
     // 2. Update
     return await prisma.client.update({
       where: { id: client.id },
